@@ -66,14 +66,10 @@ def register_interaction_tools(mcp: FastMCP):
         check_admin()
 
         try:
-            # Click on control (with optional x/y pixel offset)
             if handle is not None:
                 control = get_control_by_handle(handle)
                 if not control:
-                    return format_error(
-                        "CONTROL_NOT_FOUND",
-                        f"Invalid control handle: {handle}",
-                    )
+                    return format_error("CONTROL_NOT_FOUND", f"Invalid control handle: {handle}")
 
                 if x is not None and y is not None:
                     try:
@@ -98,15 +94,10 @@ def register_interaction_tools(mcp: FastMCP):
 
                 return {"success": True, "data": {"action": "click", "handle": handle, "ratioX": rx, "ratioY": ry}}
 
-            # Absolute-coordinate click: resolve via UIA ControlFromPoint, then ratio-click
             if x is not None and y is not None:
                 ctrl = auto.ControlFromPoint(x, y)
                 if ctrl is None:
-                    return format_error(
-                        "NO_CONTROL_AT_POINT",
-                        f"No control at ({x}, {y})",
-                        ["Try providing a handle instead"],
-                    )
+                    return format_error("NO_CONTROL_AT_POINT", f"No control at ({x}, {y})", ["Try providing a handle instead"])
                 try:
                     rect = ctrl.BoundingRectangle
                     cw = max(1, rect.width())
@@ -127,183 +118,80 @@ def register_interaction_tools(mcp: FastMCP):
 
                 return {"success": True, "data": {"action": "click", "x": x, "y": y, "controlType": ctrl.ControlTypeName}}
 
-            return format_error(
-                "INVALID_PARAMS",
-                "Need handle or (x, y) coordinates",
-            )
+            return format_error("INVALID_PARAMS", "Need handle or (x, y) coordinates")
 
         except Exception as e:
             logger.exception("ui_click failed")
             return format_error("INTERNAL_ERROR", str(e))
 
     @mcp.tool()
-    def ui_send_keys(
-        handle: int,
-        text: str,
-        interval: float = 0.05,
-    ) -> dict:
-        """Send keyboard input to a control.
-
-        Args:
-            handle: Control handle
-            text: Text/keys to send (use {Ctrl}, {Enter}, etc. for special keys)
-            interval: Interval between keystrokes in seconds
-
-        Returns:
-            Success or error
-        """
+    def ui_send_keys(handle: int, text: str, interval: float = 0.05) -> dict:
+        """Set text via UIA ValuePattern (NO physical keyboard simulation)."""
         check_admin()
-
         try:
             control = get_control_by_handle(handle)
             if not control:
-                return format_error(
-                    "CONTROL_NOT_FOUND",
-                    f"Invalid control handle: {handle}",
-                )
-
-            control.SendKeys(text, interval=interval)
-            return {"success": True, "data": {"action": "send_keys", "text": text}}
-
+                return format_error("CONTROL_NOT_FOUND", f"Invalid control handle: {handle}")
+            pattern = control.GetValuePattern()
+            if pattern:
+                pattern.SetValue(text)
+                return {"success": True, "data": {"action": "set_value", "text": text, "method": "ValuePattern"}}
+            return format_error("PATTERN_NOT_SUPPORTED", "Control does not support ValuePattern", ["Physical keyboard simulation is disabled. Use ui_set_value instead."])
         except Exception as e:
             logger.exception("ui_send_keys failed")
             return format_error("INTERNAL_ERROR", str(e))
 
     @mcp.tool()
-    def ui_set_value(
-        handle: int,
-        value: str,
-    ) -> dict:
-        """Set text value of a control using ValuePattern.
-
-        Args:
-            handle: Control handle
-            value: Value to set
-
-        Returns:
-            Success or error
-        """
+    def ui_set_value(handle: int, value: str) -> dict:
+        """Set text value of a control using ValuePattern."""
         check_admin()
-
         try:
             control = get_control_by_handle(handle)
             if not control:
-                return format_error(
-                    "CONTROL_NOT_FOUND",
-                    f"Invalid control handle: {handle}",
-                )
-
+                return format_error("CONTROL_NOT_FOUND", f"Invalid control handle: {handle}")
             pattern = control.GetValuePattern()
             if not pattern:
-                return format_error(
-                    "PATTERN_NOT_SUPPORTED",
-                    "Control does not support ValuePattern",
-                    ["Try ui_send_keys instead"],
-                )
-
+                return format_error("PATTERN_NOT_SUPPORTED", "Control does not support ValuePattern")
             pattern.SetValue(value)
             return {"success": True, "data": {"action": "set_value", "value": value}}
-
         except Exception as e:
             logger.exception("ui_set_value failed")
             return format_error("INTERNAL_ERROR", str(e))
 
     @mcp.tool()
-    def ui_close_window(
-        handle: int,
-        confirmationToken: Optional[str] = None,
-    ) -> dict:
-        """Close a window. Requires confirmation.
-
-        Args:
-            handle: Window handle
-            confirmationToken: Token from previous confirmation (if required)
-
-        Returns:
-            Confirmation request, success, or error
-        """
+    def ui_close_window(handle: int, confirmationToken: Optional[str] = None) -> dict:
+        """Close a window. Requires confirmation. NO Alt+F4 fallback."""
         check_admin()
-
         try:
             control = get_control_by_handle(handle)
             if not control:
-                return format_error(
-                    "CONTROL_NOT_FOUND",
-                    f"Invalid window handle: {handle}",
-                )
-
-            # Check if confirmation is needed
+                return format_error("CONTROL_NOT_FOUND", f"Invalid window handle: {handle}")
             if config.confirmation_enabled and not confirmationToken:
-                request = create_confirmation(
-                    "ui_close_window",
-                    {"windowName": control.Name, "handle": handle},
-                    f"About to close window '{control.Name}', continue?",
-                )
+                request = create_confirmation("ui_close_window", {"windowName": control.Name, "handle": handle}, f"About to close window '{control.Name}', continue?")
                 return {"success": False, "requiresConfirmation": True, "confirmation": request.model_dump()}
-
-            # Verify confirmation token
             if config.confirmation_enabled and confirmationToken:
-                result = confirm_operation(confirmationToken, True)
-                if not result:
+                if not confirm_operation(confirmationToken, True):
                     return format_error("INVALID_CONFIRMATION", "Confirmation token invalid or expired")
-
-            # Close the window
             pattern = control.GetWindowPattern()
             if pattern:
                 pattern.Close()
             else:
-                # Fallback to Alt+F4
-                control.SetFocus()
-                auto.SendKeys("{Alt}{F4}")
-
+                return format_error("PATTERN_NOT_SUPPORTED", "Window does not support WindowPattern", ["Physical keyboard simulation is disabled"])
             return {"success": True, "data": {"action": "close_window", "handle": handle}}
-
         except Exception as e:
             logger.exception("ui_close_window failed")
             return format_error("INTERNAL_ERROR", str(e))
 
     @mcp.tool()
-    def ui_move_window(
-        handle: int,
-        x: Optional[int] = None,
-        y: Optional[int] = None,
-        width: Optional[int] = None,
-        height: Optional[int] = None,
-    ) -> dict:
-        """Move and/or resize a window.
-
-        Args:
-            handle: Window handle
-            x: New X position (optional)
-            y: New Y position (optional)
-            width: New width (optional)
-            height: New height (optional)
-
-        Returns:
-            Success or error
-        """
+    def ui_move_window(handle: int, x: Optional[int] = None, y: Optional[int] = None, width: Optional[int] = None, height: Optional[int] = None) -> dict:
+        """Move and/or resize a window."""
         check_admin()
-
         try:
             control = get_control_by_handle(handle)
             if not control:
-                return format_error(
-                    "CONTROL_NOT_FOUND",
-                    f"Invalid window handle: {handle}",
-                )
-
+                return format_error("CONTROL_NOT_FOUND", f"Invalid window handle: {handle}")
             control.MoveWindow(x, y, width, height)
-            return {
-                "success": True,
-                "data": {
-                    "action": "move_window",
-                    "x": x,
-                    "y": y,
-                    "width": width,
-                    "height": height,
-                }
-            }
-
+            return {"success": True, "data": {"action": "move_window", "x": x, "y": y, "width": width, "height": height}}
         except Exception as e:
             logger.exception("ui_move_window failed")
             return format_error("INTERNAL_ERROR", str(e))

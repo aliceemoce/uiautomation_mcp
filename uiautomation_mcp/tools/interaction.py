@@ -13,11 +13,9 @@ from ..core import (
     format_error,
     create_confirmation,
     confirm_operation,
-    is_dangerous_tool,
     check_admin,
 )
 from ..config import config
-from ..models import MouseButton
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +36,12 @@ def register_interaction_tools(mcp: FastMCP):
     ) -> dict:
         """Click on a control or at coordinates.
 
+        NO physical cursor movement - uses UIA ratio-click (simulateMove=False).
+
         Args:
             handle: Control handle to click (uses center if no x/y)
-            x: Relative X offset from control center, or absolute if no handle
-            y: Relative Y offset from control center, or absolute if no handle
+            x: Relative X offset from control top-left, or absolute screen X
+            y: Relative Y offset from control top-left, or absolute screen Y
             button: Mouse button (left, right, middle)
             double: Whether to double-click
 
@@ -51,37 +51,71 @@ def register_interaction_tools(mcp: FastMCP):
         check_admin()
 
         try:
-            # Click at absolute coordinates
-            if handle is None and x is not None and y is not None:
-                if button == "right":
-                    auto.RightClick(x, y)
-                elif button == "middle":
-                    auto.MiddleClick(x, y)
-                elif double:
-                    auto.DoubleClick(x, y)
+            # Click on control (with optional x/y pixel offset)
+            if handle is not None:
+                control = get_control_by_handle(handle)
+                if not control:
+                    return format_error(
+                        "CONTROL_NOT_FOUND",
+                        f"Invalid control handle: {handle}",
+                    )
+
+                if x is not None and y is not None:
+                    try:
+                        rect = control.BoundingRectangle
+                        cw = max(1, rect.width())
+                        ch = max(1, rect.height())
+                        rx = max(0.01, min(0.99, x / cw))
+                        ry = max(0.01, min(0.99, y / ch))
+                    except Exception:
+                        rx, ry = 0.5, 0.5
                 else:
-                    auto.Click(x, y)
-                return {"success": True, "data": {"action": "click", "x": x, "y": y}}
+                    rx, ry = 0.5, 0.5
 
-            # Click on control
-            control = get_control_by_handle(handle)
-            if not control:
-                return format_error(
-                    "CONTROL_NOT_FOUND",
-                    f"控件句柄无效: {handle}",
-                )
+                if button == "right":
+                    control.RightClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                elif button == "middle":
+                    control.MiddleClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                elif double:
+                    control.DoubleClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                else:
+                    control.Click(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
 
-            # Determine click method
-            if button == "right":
-                control.RightClick(x, y)
-            elif button == "middle":
-                control.MiddleClick(x, y)
-            elif double:
-                control.DoubleClick(x, y)
-            else:
-                control.Click(x, y)
+                return {"success": True, "data": {"action": "click", "handle": handle, "ratioX": rx, "ratioY": ry}}
 
-            return {"success": True, "data": {"action": "click", "handle": handle}}
+            # Absolute-coordinate click: resolve via UIA ControlFromPoint, then ratio-click
+            if x is not None and y is not None:
+                ctrl = auto.ControlFromPoint(x, y)
+                if ctrl is None:
+                    return format_error(
+                        "NO_CONTROL_AT_POINT",
+                        f"No control at ({x}, {y})",
+                        ["Try providing a handle instead"],
+                    )
+                try:
+                    rect = ctrl.BoundingRectangle
+                    cw = max(1, rect.width())
+                    ch = max(1, rect.height())
+                    rx = max(0.01, min(0.99, (x - int(rect.left)) / cw))
+                    ry = max(0.01, min(0.99, (y - int(rect.top)) / ch))
+                except Exception:
+                    rx, ry = 0.5, 0.5
+
+                if button == "right":
+                    ctrl.RightClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                elif button == "middle":
+                    ctrl.MiddleClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                elif double:
+                    ctrl.DoubleClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                else:
+                    ctrl.Click(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+
+                return {"success": True, "data": {"action": "click", "x": x, "y": y, "controlType": ctrl.ControlTypeName}}
+
+            return format_error(
+                "INVALID_PARAMS",
+                "Need handle or (x, y) coordinates",
+            )
 
         except Exception as e:
             logger.exception("ui_click failed")
@@ -110,7 +144,7 @@ def register_interaction_tools(mcp: FastMCP):
             if not control:
                 return format_error(
                     "CONTROL_NOT_FOUND",
-                    f"控件句柄无效: {handle}",
+                    f"Invalid control handle: {handle}",
                 )
 
             control.SendKeys(text, interval=interval)
@@ -141,15 +175,15 @@ def register_interaction_tools(mcp: FastMCP):
             if not control:
                 return format_error(
                     "CONTROL_NOT_FOUND",
-                    f"控件句柄无效: {handle}",
+                    f"Invalid control handle: {handle}",
                 )
 
             pattern = control.GetValuePattern()
             if not pattern:
                 return format_error(
                     "PATTERN_NOT_SUPPORTED",
-                    "控件不支持 ValuePattern",
-                    ["尝试使用 ui_send_keys 发送键盘输入"],
+                    "Control does not support ValuePattern",
+                    ["Try ui_send_keys instead"],
                 )
 
             pattern.SetValue(value)
@@ -180,7 +214,7 @@ def register_interaction_tools(mcp: FastMCP):
             if not control:
                 return format_error(
                     "CONTROL_NOT_FOUND",
-                    f"窗口句柄无效: {handle}",
+                    f"Invalid window handle: {handle}",
                 )
 
             # Check if confirmation is needed
@@ -188,7 +222,7 @@ def register_interaction_tools(mcp: FastMCP):
                 request = create_confirmation(
                     "ui_close_window",
                     {"windowName": control.Name, "handle": handle},
-                    f"即将关闭窗口「{control.Name}」，是否继续？",
+                    f"About to close window '{control.Name}', continue?",
                 )
                 return {"success": False, "requiresConfirmation": True, "confirmation": request.model_dump()}
 
@@ -196,7 +230,7 @@ def register_interaction_tools(mcp: FastMCP):
             if config.confirmation_enabled and confirmationToken:
                 result = confirm_operation(confirmationToken, True)
                 if not result:
-                    return format_error("INVALID_CONFIRMATION", "确认令牌无效或已过期")
+                    return format_error("INVALID_CONFIRMATION", "Confirmation token invalid or expired")
 
             # Close the window
             pattern = control.GetWindowPattern()
@@ -240,7 +274,7 @@ def register_interaction_tools(mcp: FastMCP):
             if not control:
                 return format_error(
                     "CONTROL_NOT_FOUND",
-                    f"窗口句柄无效: {handle}",
+                    f"Invalid window handle: {handle}",
                 )
 
             control.MoveWindow(x, y, width, height)

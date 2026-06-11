@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 # Store pending confirmations for dangerous operations
 _pending_confirms = {}
 
+# uiautomation's Click() always calls SetCursorPos internally.
+# Work around by saving/restoring cursor position around every click.
+def _safe_click(ctrl, func, ratioX=0.5, ratioY=0.5):
+    import win32api
+    try:
+        old = win32api.GetCursorPos()
+    except Exception:
+        old = None
+    func(ctrl, ratioX=ratioX, ratioY=ratioY, simulateMove=False, waitTime=0)
+    if old is not None:
+        try:
+            win32api.SetCursorPos(*old)
+        except Exception:
+            pass
+
 
 def register_interaction_tools(mcp: FastMCP):
     """Register interaction tools with the MCP server."""
@@ -73,13 +88,13 @@ def register_interaction_tools(mcp: FastMCP):
                     rx, ry = 0.5, 0.5
 
                 if button == "right":
-                    control.RightClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                    _safe_click(control, lambda c, **kw: c.RightClick(**kw), ratioX=rx, ratioY=ry)
                 elif button == "middle":
-                    control.MiddleClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                    _safe_click(control, lambda c, **kw: c.MiddleClick(**kw), ratioX=rx, ratioY=ry)
                 elif double:
-                    control.DoubleClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                    _safe_click(control, lambda c, **kw: c.DoubleClick(**kw), ratioX=rx, ratioY=ry)
                 else:
-                    control.Click(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                    _safe_click(control, lambda c, **kw: c.Click(**kw), ratioX=rx, ratioY=ry)
 
                 return {"success": True, "data": {"action": "click", "handle": handle, "ratioX": rx, "ratioY": ry}}
 
@@ -102,13 +117,13 @@ def register_interaction_tools(mcp: FastMCP):
                     rx, ry = 0.5, 0.5
 
                 if button == "right":
-                    ctrl.RightClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                    _safe_click(ctrl, lambda c, **kw: c.RightClick(**kw), ratioX=rx, ratioY=ry)
                 elif button == "middle":
-                    ctrl.MiddleClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                    _safe_click(ctrl, lambda c, **kw: c.MiddleClick(**kw), ratioX=rx, ratioY=ry)
                 elif double:
-                    ctrl.DoubleClick(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                    _safe_click(ctrl, lambda c, **kw: c.DoubleClick(**kw), ratioX=rx, ratioY=ry)
                 else:
-                    ctrl.Click(ratioX=rx, ratioY=ry, simulateMove=False, waitTime=0)
+                    _safe_click(ctrl, lambda c, **kw: c.Click(**kw), ratioX=rx, ratioY=ry)
 
                 return {"success": True, "data": {"action": "click", "x": x, "y": y, "controlType": ctrl.ControlTypeName}}
 
